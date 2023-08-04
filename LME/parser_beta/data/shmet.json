@@ -1,1 +1,1 @@
-{"code": "000000", "message": "SUCCESS", "data": {"spotPrices": [{"dateTime": 1691033400000, "price": "69425", "unit": "Yuan/MT"}], "scId": 1105, "nameEn": "Cu cathode 1#", "unit": "Yuan/MT", "showDetils": false}}
+{"code": "000000", "message": "SUCCESS", "data": {"spotPrices": [], "scId": 1105, "nameEn": "Cu cathode 1#", "unit": "Yuan/MT", "showDetils": false}}
