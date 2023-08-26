@@ -37,7 +37,7 @@ def google_upload(df, sheet_name):
         'https://spreadsheets.google.com/feeds',
         'https://www.googleapis.com/auth/drive']
     credentials = ServiceAccountCredentials.from_json_keyfile_name(
-        '/Users/kirillkuznecov/Documents/data_science_learning/code/LME/parser_beta/standalone/macro-parser-lme-c2f2972b48fc.json', scope) #security token
+        'client_secret.json', scope) #security token
     gc = gspread.authorize(credentials)
 
     #Key params for connection to particular document
