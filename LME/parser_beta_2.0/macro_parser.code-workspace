@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"name": "data_science",
+			"path": "../../../data_science"
+		}
+	],
+	"settings": {}
+}
