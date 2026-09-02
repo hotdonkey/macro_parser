@@ -9,6 +9,7 @@ from .services import (
     check_and_save_pair,
     show_db,
     db_check,
+    excel_to_csv_db,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "check_and_save_pair",
     "show_db",
     "db_check",
+    "excel_to_csv_db",
 ]

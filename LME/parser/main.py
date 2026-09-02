@@ -20,6 +20,7 @@ from service_layer import (
     read_db,
     show_db,
     db_check,
+    excel_to_csv_db
 )
 
 warnings.filterwarnings("ignore")
@@ -84,6 +85,10 @@ async def main():
     print("+" * 64)
     print("Visual control")
     print("+" * 64)
+
+    print("Converting Excel to CSV...")
+    excel_to_csv_db()
+    print("CSV conversion completed!")
 
     # Базовые металлы
     show_db("lme_selenium_db", LME_PATH, sheet_name=0)

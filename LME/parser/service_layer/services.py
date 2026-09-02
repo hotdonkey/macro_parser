@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # parser > service_layer > services.py
 
+import os
 import pandas as pd
 from pathlib import Path
 
@@ -74,7 +75,7 @@ def read_db(path, sheet_name=0):
 
     df = make_unique_columns(df)
 
-    # 🧹 ОЧИСТКА ОТ ДУБЛЕЙ КОЛОНОК (nickel_1, date_1, zink_1 и т.д.)
+    # 🧹 ОЧИСТКА ОТ ДУБЛЕЙ (nickel_1, date_1, zink_1 и т.д.)
     cols_to_drop = []
     for col in df.columns:
         col_str = str(col)
@@ -136,12 +137,14 @@ def save_db(df, path, sheet_name, index=False):
         )
 
 
-def prepare_for_append(df, target_date_name):
+def prepare_for_append(df, target_date_name, target_columns):
     """
     Готовит строки из одной базы для добавления в другую.
 
     Например, если в первой базе дата называется 'Date',
     а во второй 'date', приводит первую колонку к имени 'Date'.
+
+    Также выравнивает порядок колонок под target_columns.
     """
     df = df.copy()
 
@@ -157,7 +160,17 @@ def prepare_for_append(df, target_date_name):
             }
         )
 
-    return make_unique_columns(df)
+    df = make_unique_columns(df)
+
+    # 🔴 ВАЖНО: Добавляем недостающие колонки и выравниваем порядок
+    for col in target_columns:
+        if col not in df.columns:
+            df[col] = None
+
+    # Приводим к тому же порядку колонок
+    df = df[target_columns]
+
+    return df
 
 
 def check_df(df_1, df_2):
@@ -217,27 +230,17 @@ def check_df(df_1, df_2):
 
     # 🔴 ВАЖНО: перед слиянием приводим колонки к одному порядку
     if not missing_in_1.empty:
-        # Приводим missing_in_1 к структуре df_1
-        missing_in_1 = prepare_for_append(missing_in_1, date_col_1)
-        # Добавляем недостающие колонки из df_1
-        for col in df_1.columns:
-            if col not in missing_in_1.columns:
-                missing_in_1[col] = None
-        # Приводим к тому же порядку колонок
-        missing_in_1 = missing_in_1[df_1.columns]
+        # Приводим missing_in_1 к структуре df_1 с правильным порядком колонок
+        missing_in_1 = prepare_for_append(
+            missing_in_1, date_col_1, df_1.columns.tolist())
         df_1_checked = pd.concat([df_1, missing_in_1], ignore_index=True)
     else:
         df_1_checked = df_1.copy()
 
     if not missing_in_2.empty:
-        # Приводим missing_in_2 к структуре df_2
-        missing_in_2 = prepare_for_append(missing_in_2, date_col_2)
-        # Добавляем недостающие колонки из df_2
-        for col in df_2.columns:
-            if col not in missing_in_2.columns:
-                missing_in_2[col] = None
-        # Приводим к тому же порядку колонок
-        missing_in_2 = missing_in_2[df_2.columns]
+        # Приводим missing_in_2 к структуре df_2 с правильным порядком колонок
+        missing_in_2 = prepare_for_append(
+            missing_in_2, date_col_2, df_2.columns.tolist())
         df_2_checked = pd.concat([df_2, missing_in_2], ignore_index=True)
     else:
         df_2_checked = df_2.copy()
@@ -335,6 +338,63 @@ def db_check():
     )
 
 
+# ================================================================
+# Конвертация Excel в CSV
+# ================================================================
+
+def excel_to_csv_db():
+    """
+    Конвертирует все Excel файлы в CSV для дальнейшего анализа.
+    Обходит все папки с данными (lme/data, westmetall/data, и т.д.)
+    """
+
+    def df_to_csv(file_path):
+        """
+        Конвертирует один Excel файл в CSV.
+        """
+        try:
+            file_path = Path(file_path)
+            csv_path = file_path.with_suffix('.csv')
+
+            # Читаем Excel
+            df = pd.read_excel(file_path, index_col=0)
+
+            # Сохраняем в CSV
+            df.to_csv(csv_path, sep=",", index=False)
+            print(f"✅ {file_path.name} -> {csv_path.name}")
+
+        except Exception as e:
+            print(f"❌ Ошибка конвертации {file_path}: {e}")
+
+    def find_all_xlsx_files(base_dir):
+        """
+        Рекурсивно находит все .xlsx файлы в директории и поддиректориях.
+        """
+        xlsx_files = []
+        base_path = Path(base_dir)
+
+        for root, dirs, files in os.walk(base_path):
+            for file in files:
+                if file.endswith(".xlsx"):
+                    xlsx_files.append(Path(root) / file)
+
+        return xlsx_files
+
+    # Базовая директория проекта
+    base_directory = Path.cwd()
+
+    print("Поиск Excel файлов...")
+    xlsx_files = find_all_xlsx_files(base_directory)
+
+    print(f"Найдено {len(xlsx_files)} Excel файлов")
+    print("Конвертация в CSV...")
+
+    for file_path in xlsx_files:
+        df_to_csv(file_path)
+
+    print("Конвертация завершена!")
+
+
 __all__ = [
     "make_unique_columns",
     "read_db",
@@ -344,4 +404,5 @@ __all__ = [
     "check_and_save_pair",
     "show_db",
     "db_check",
+    "excel_to_csv_db",
 ]
