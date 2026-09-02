@@ -11,123 +11,98 @@ import requests
 
 warnings.filterwarnings("ignore")
 
-
-# Пути привязываем к папке nbk/
+# Привязываем пути к папке nbk/
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-
 XLSX_PATH = DATA_DIR / "nbk_tenge.xlsx"
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
-}
-
-
-def _fetch_and_parse_sync() -> pd.DataFrame:
-    """
-    Синхронный запрос и парсинг таблицы Национального банка Казахстана.
-    Выносится отдельно, чтобы запускать через asyncio.to_thread().
-    """
-    year = date.today().year
-
-    upper_bound = "01.01.2022"
-    lower_bound = f"31.12.{year}"
-
-    url = (
-        "https://nationalbank.kz/ru/exchangerates/"
-        "ezhednevnye-oficialnye-rynochnye-kursy-valyut/report"
-    )
-
-    params = {
-        "rates[]": "5",
-        "beginDate": upper_bound,
-        "endDate": lower_bound,
-    }
-
-    last_error = None
-
-    # Делаем несколько попыток, так как источник действительно нестабильный
-    for attempt in range(7):
-        try:
-            response = requests.get(
-                url,
-                params=params,
-                headers=HEADERS,
-                timeout=30,
-            )
-
-            response.raise_for_status()
-
-            tables = pd.read_html(response.text)
-
-            if not tables:
-                raise ValueError("NBK вернул страницу без таблиц")
-
-            df = tables[0].copy()
-
-            if df.empty:
-                return pd.DataFrame(columns=["date"])
-
-            # Переименовываем первую колонку в date,
-            # даже если она называлась "Unnamed: 0" или как-то иначе
-            first_col = df.columns[0]
-
-            df = df.rename(
-                columns={
-                    first_col: "date",
-                }
-            )
-
-            df["date"] = pd.to_datetime(
-                df["date"],
-                errors="coerce",
-                dayfirst=True,
-            )
-
-            df = df.dropna(subset=["date"])
-            df = df.sort_values("date").reset_index(drop=True)
-
-            return df
-
-        except Exception as error:
-            last_error = error
-
-    raise RuntimeError(
-        f"NBK не ответил корректно после нескольких попыток: {last_error}"
-    )
 
 
 async def nbk_tenge_async():
     try:
-        df = await asyncio.to_thread(_fetch_and_parse_sync)
+        year = date.today().year
+        upper_bound = "01.01.2022"
+        lower_bound = f"31.12.{year}"
 
-        if df.empty:
-            print("⚠️ NBK: таблица пустая. Файл не обновляется.")
+        url = (
+            "https://nationalbank.kz/ru/exchangerates/"
+            "ezhednevnye-oficialnye-rynochnye-kursy-valyut/report"
+            f"?rates%5B%5D=5&beginDate={upper_bound}&endDate={lower_bound}"
+        )
+
+        # Запрос с повторными попытками
+        page = None
+        for attempt in range(7):
+            try:
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
+                page = response
+                break
+            except Exception as e:
+                print(f"⚠️ NBK попытка {attempt + 1}/7 не удалась: {e}")
+                await asyncio.sleep(2)
+
+        if page is None:
+            print("❌ NBK: не удалось получить данные после 7 попыток")
             return
 
+        # Парсинг таблицы
+        tables = pd.read_html(page.text)
+        if not tables:
+            print("❌ NBK: таблица не найдена на странице")
+            return
+
+        df = tables[0]
+
+        # Первая колонка — это дата
+        date_col = df.columns[0]
+        df = df.rename(columns={date_col: "date"})
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df.dropna(subset=["date"])
+
+        # Приводим числовые колонки к numeric
+        for col in df.columns:
+            if col != "date":
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        df = df.sort_values("date").reset_index(drop=True)
+
+        # 🔴 ЧИТАЕМ СТАРЫЙ ФАЙЛ И ОБЪЕДИНЯЕМ
+        if XLSX_PATH.exists():
+            try:
+                historical = pd.read_excel(XLSX_PATH)
+                # Убираем служебную колонку индекса, если есть
+                if historical.columns.size > 0 and str(
+                    historical.columns[0]
+                ).startswith("Unnamed"):
+                    historical = historical.drop(columns=historical.columns[0])
+
+                # Объединяем старое и новое
+                combined = pd.concat([historical, df], ignore_index=True)
+            except Exception as e:
+                print(f"⚠️ NBK: ошибка чтения старого файла: {e}")
+                combined = df
+        else:
+            combined = df
+
+        # Удаляем дубликаты по дате, оставляем последнюю запись
+        combined = combined.sort_values("date").drop_duplicates(
+            subset=["date"], keep="last"
+        )
+        combined = combined.reset_index(drop=True)
+
+        # Сохраняем
         with pd.ExcelWriter(
             XLSX_PATH,
             date_format="YYYY-MM-DD",
             datetime_format="YYYY-MM-DD",
         ) as writer:
-            df.to_excel(
-                writer,
-                sheet_name="tenge",
-                index=False,
-            )
+            combined.to_excel(writer, sheet_name="tenge", index=False)
 
-        print("NBK_tenge parsing is DONE!")
-
-        return df
+        print(f"NBK_tenge parsing is DONE! ({len(combined)} строк)")
 
     except Exception as error:
-        print(f"Произошла ошибка NBK: {error}")
+        print(f"❌ Ошибка NBK: {error}")
 
 
-__all__ = [
-    "nbk_tenge_async",
-]
+__all__ = ["nbk_tenge_async"]

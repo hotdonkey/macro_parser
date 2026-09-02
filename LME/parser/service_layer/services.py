@@ -13,7 +13,6 @@ from pathlib import Path
 def make_unique_columns(df):
     """
     Делает названия колонок уникальными.
-    Например: date, date, date -> date, date_1, date_2
     """
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [
@@ -43,11 +42,34 @@ def make_unique_columns(df):
     return df
 
 
+def _find_date_column(df):
+    """
+    Ищет колонку с датой по имени.
+    Если не находит — возвращает первую колонку.
+    """
+    date_names = {"date", "дата", "даты"}
+
+    for col in df.columns:
+        if str(col).strip().lower() in date_names:
+            return col
+
+    # Если не нашли по имени — берём первую колонку
+    return df.columns[0]
+
+
+def _move_date_first(df):
+    """
+    Перемещает колонку с датой на первую позицию.
+    """
+    date_col = _find_date_column(df)
+    cols_order = [date_col] + [c for c in df.columns if c != date_col]
+    return df[cols_order]
+
+
 def read_db(path, sheet_name=0):
     """
-    Читает Excel-файл и приводит первую колонку к дате.
-    Если есть служебная колонка типа 'Unnamed: 0', удаляет её.
-    Также принудительно делает колонки уникальными.
+    Читает Excel-файл и приводит колонку с датой к формату datetime.
+    Колонка даты ищется по имени, а не берётся вслепую.
     """
     path = Path(path)
 
@@ -55,7 +77,6 @@ def read_db(path, sheet_name=0):
         print(f"⚠️ Файл не найден: {path}")
         return pd.DataFrame()
 
-    # Читаем лист. Если передано имя, но его нет, берем первый (0)
     try:
         df = pd.read_excel(path, sheet_name=sheet_name)
     except ValueError:
@@ -67,22 +88,20 @@ def read_db(path, sheet_name=0):
             for col in df.columns
         ]
 
+    # Удаляем служебную колонку индекса, если она есть
     if df.columns.size > 0:
         first_col_name = str(df.columns[0]).strip().lower()
-
         if first_col_name.startswith("unnamed") or first_col_name == "":
             df = df.drop(columns=df.columns[0])
 
     df = make_unique_columns(df)
 
-    # 🧹 ОЧИСТКА ОТ ДУБЛЕЙ (nickel_1, date_1, zink_1 и т.д.)
+    # 🧹 ОЧИСТКА ОТ ДУБЛЕЙ КОЛОНОК (nickel_1, date_1, zink_1 и т.д.)
     cols_to_drop = []
     for col in df.columns:
         col_str = str(col)
-
         if col_str.endswith("_1") or col_str.endswith("_2"):
             base_col = col_str.rsplit("_", 1)[0]
-
             if base_col in df.columns:
                 cols_to_drop.append(col)
 
@@ -102,6 +121,8 @@ def read_db(path, sheet_name=0):
     if df.empty or df.columns.size == 0:
         return pd.DataFrame()
 
+    # 🔴 Ищем колонку даты по имени, а не берём первую попавшуюся
+    df = _move_date_first(df)
     date_col = df.columns[0]
 
     df[date_col] = pd.to_datetime(
@@ -118,12 +139,15 @@ def read_db(path, sheet_name=0):
 def save_db(df, path, sheet_name, index=False):
     """
     Сохраняет DataFrame в Excel.
-    По умолчанию index=False, чтобы не плодить колонку 'Unnamed: 0'.
+    Колонка с датой всегда ставится на первую позицию.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     df = make_unique_columns(df.copy())
+
+    # 🔴 Гарантируем что колонка даты на первом месте
+    df = _move_date_first(df)
 
     with pd.ExcelWriter(
         path,
@@ -140,11 +164,6 @@ def save_db(df, path, sheet_name, index=False):
 def prepare_for_append(df, target_date_name, target_columns):
     """
     Готовит строки из одной базы для добавления в другую.
-
-    Например, если в первой базе дата называется 'Date',
-    а во второй 'date', приводит первую колонку к имени 'Date'.
-
-    Также выравнивает порядок колонок под target_columns.
     """
     df = df.copy()
 
@@ -162,12 +181,10 @@ def prepare_for_append(df, target_date_name, target_columns):
 
     df = make_unique_columns(df)
 
-    # 🔴 ВАЖНО: Добавляем недостающие колонки и выравниваем порядок
     for col in target_columns:
         if col not in df.columns:
             df[col] = None
 
-    # Приводим к тому же порядку колонок
     df = df[target_columns]
 
     return df
@@ -175,15 +192,7 @@ def prepare_for_append(df, target_date_name, target_columns):
 
 def check_df(df_1, df_2):
     """
-    Сравнивает две базы по первой колонке, которая считается датой.
-
-    Если в первой базе есть даты, которых нет во второй,
-    добавляет их во вторую.
-
-    Если во второй базе есть даты, которых нет в первой,
-    добавляет их в первую.
-
-    Удаляет полные дубликаты строк и сохраняет первое вхождение (более раннюю дату).
+    Сравнивает две базы по колонке с датой.
     """
     if df_1.empty or df_2.empty:
         return df_1.copy(), df_2.copy()
@@ -193,6 +202,10 @@ def check_df(df_1, df_2):
 
     if df_1.empty or df_2.empty:
         return df_1, df_2
+
+    # 🔴 Ищем колонку даты по имени
+    df_1 = _move_date_first(df_1)
+    df_2 = _move_date_first(df_2)
 
     date_col_1, date_col_2 = df_1.columns[0], df_2.columns[0]
 
@@ -222,15 +235,10 @@ def check_df(df_1, df_2):
 
     dates_1, dates_2 = set(df_1[date_col_1]), set(df_2[date_col_2])
 
-    # Строки из df_2, которых нет в df_1
     missing_in_1 = df_2[~df_2[date_col_2].isin(dates_1)].copy()
-
-    # Строки из df_1, которых нет в df_2
     missing_in_2 = df_1[~df_1[date_col_1].isin(dates_2)].copy()
 
-    # 🔴 ВАЖНО: перед слиянием приводим колонки к одному порядку
     if not missing_in_1.empty:
-        # Приводим missing_in_1 к структуре df_1 с правильным порядком колонок
         missing_in_1 = prepare_for_append(
             missing_in_1, date_col_1, df_1.columns.tolist())
         df_1_checked = pd.concat([df_1, missing_in_1], ignore_index=True)
@@ -238,30 +246,24 @@ def check_df(df_1, df_2):
         df_1_checked = df_1.copy()
 
     if not missing_in_2.empty:
-        # Приводим missing_in_2 к структуре df_2 с правильным порядком колонок
         missing_in_2 = prepare_for_append(
             missing_in_2, date_col_2, df_2.columns.tolist())
         df_2_checked = pd.concat([df_2, missing_in_2], ignore_index=True)
     else:
         df_2_checked = df_2.copy()
 
-    # Очищаем каждый датафрейм
     for d, col in [(df_1_checked, date_col_1), (df_2_checked, date_col_2)]:
         if not d.empty:
             d[col] = pd.to_datetime(d[col], errors="coerce").dt.normalize()
             d.dropna(subset=[col], inplace=True)
-
-            # Сортируем по дате (от старых к новым)
             d.sort_values(col, inplace=True)
-
-            # 🔄 ВАЖНО: Сначала удаляем ПОЛНЫЕ дубликаты строк (по всем данным)
-            # Это уберет строки, которые полностью идентичны
             d.drop_duplicates(inplace=True)
-
-            # Затем удаляем дубликаты по дате, оставляя ПЕРВОЕ вхождение (более раннюю дату)
             d.drop_duplicates(subset=[col], keep="first", inplace=True)
-
             d.reset_index(drop=True, inplace=True)
+
+    # 🔴 Гарантируем порядок колонок: дата первая
+    df_1_checked = _move_date_first(df_1_checked)
+    df_2_checked = _move_date_first(df_2_checked)
 
     return make_unique_columns(df_1_checked), make_unique_columns(df_2_checked)
 
@@ -269,10 +271,8 @@ def check_df(df_1, df_2):
 def check_and_save_pair(path_1, path_2, pair_name="", index=False):
     """
     Проверяет пару файлов.
-    Если находят пропущенные даты, дописывает их обратно в файлы.
     """
     try:
-        # Читаем первые листы (sheet_name=0), чтобы не падать на именах
         df_1 = read_db(path_1, sheet_name=0)
         df_2 = read_db(path_2, sheet_name=0)
 
@@ -345,7 +345,7 @@ def db_check():
 def excel_to_csv_db():
     """
     Конвертирует все Excel файлы в CSV для дальнейшего анализа.
-    Обходит все папки с данными (lme/data, westmetall/data, и т.д.)
+    Обходит все папки с данными.
     """
 
     def df_to_csv(file_path):
@@ -356,10 +356,20 @@ def excel_to_csv_db():
             file_path = Path(file_path)
             csv_path = file_path.with_suffix('.csv')
 
-            # Читаем Excel
-            df = pd.read_excel(file_path, index_col=0)
+            # 🔴 Читаем БЕЗ index_col=0!
+            # Если файл многостраничный — берём первый лист
+            try:
+                df = pd.read_excel(file_path, sheet_name=0)
+            except Exception:
+                df = pd.read_excel(file_path)
 
-            # Сохраняем в CSV
+            # Удаляем служебную колонку индекса, если она есть
+            if df.columns.size > 0 and str(df.columns[0]).lower().startswith("unnamed"):
+                df = df.drop(columns=df.columns[0])
+
+            # Перемещаем колонку даты на первую позицию
+            df = _move_date_first(df)
+
             df.to_csv(csv_path, sep=",", index=False)
             print(f"✅ {file_path.name} -> {csv_path.name}")
 
@@ -368,7 +378,7 @@ def excel_to_csv_db():
 
     def find_all_xlsx_files(base_dir):
         """
-        Рекурсивно находит все .xlsx файлы в директории и поддиректориях.
+        Рекурсивно находит все .xlsx файлы.
         """
         xlsx_files = []
         base_path = Path(base_dir)
@@ -380,7 +390,6 @@ def excel_to_csv_db():
 
         return xlsx_files
 
-    # Базовая директория проекта
     base_directory = Path.cwd()
 
     print("Поиск Excel файлов...")
