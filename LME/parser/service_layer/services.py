@@ -193,6 +193,11 @@ def prepare_for_append(df, target_date_name, target_columns):
 def check_df(df_1, df_2):
     """
     Сравнивает две базы по колонке с датой.
+
+    1. Добавляет пропущенные даты из одной базы в другую
+    2. Заполняет NaN значениями из парной базы
+    3. Удаляет полные дубликаты строк
+    4. Сохраняет первое вхождение (более раннюю дату)
     """
     if df_1.empty or df_2.empty:
         return df_1.copy(), df_2.copy()
@@ -203,41 +208,28 @@ def check_df(df_1, df_2):
     if df_1.empty or df_2.empty:
         return df_1, df_2
 
-    # 🔴 Ищем колонку даты по имени
+    # Ищем колонку даты по имени
     df_1 = _move_date_first(df_1)
     df_2 = _move_date_first(df_2)
 
     date_col_1, date_col_2 = df_1.columns[0], df_2.columns[0]
 
     df_1[date_col_1] = pd.to_datetime(
-        df_1[date_col_1],
-        errors="coerce",
-    ).dt.normalize()
-
+        df_1[date_col_1], errors="coerce").dt.normalize()
     df_2[date_col_2] = pd.to_datetime(
-        df_2[date_col_2],
-        errors="coerce",
-    ).dt.normalize()
+        df_2[date_col_2], errors="coerce").dt.normalize()
 
-    df_1 = (
-        df_1
-        .dropna(subset=[date_col_1])
-        .sort_values(date_col_1)
-        .reset_index(drop=True)
-    )
-
-    df_2 = (
-        df_2
-        .dropna(subset=[date_col_2])
-        .sort_values(date_col_2)
-        .reset_index(drop=True)
-    )
+    df_1 = df_1.dropna(subset=[date_col_1]).sort_values(
+        date_col_1).reset_index(drop=True)
+    df_2 = df_2.dropna(subset=[date_col_2]).sort_values(
+        date_col_2).reset_index(drop=True)
 
     dates_1, dates_2 = set(df_1[date_col_1]), set(df_2[date_col_2])
 
     missing_in_1 = df_2[~df_2[date_col_2].isin(dates_1)].copy()
     missing_in_2 = df_1[~df_1[date_col_1].isin(dates_2)].copy()
 
+    # Добавляем пропущенные даты
     if not missing_in_1.empty:
         missing_in_1 = prepare_for_append(
             missing_in_1, date_col_1, df_1.columns.tolist())
@@ -252,6 +244,13 @@ def check_df(df_1, df_2):
     else:
         df_2_checked = df_2.copy()
 
+    # 🔴 НОВЫЙ ШАГ: Заполняем NaN значениями из парной базы
+    df_1_checked = _fill_nan_from_pair(
+        df_1_checked, df_2_checked, date_col_1, date_col_2)
+    df_2_checked = _fill_nan_from_pair(
+        df_2_checked, df_1_checked, date_col_2, date_col_1)
+
+    # Очистка дубликатов
     for d, col in [(df_1_checked, date_col_1), (df_2_checked, date_col_2)]:
         if not d.empty:
             d[col] = pd.to_datetime(d[col], errors="coerce").dt.normalize()
@@ -261,11 +260,69 @@ def check_df(df_1, df_2):
             d.drop_duplicates(subset=[col], keep="first", inplace=True)
             d.reset_index(drop=True, inplace=True)
 
-    # 🔴 Гарантируем порядок колонок: дата первая
+    # Гарантируем порядок колонок: дата первая
     df_1_checked = _move_date_first(df_1_checked)
     df_2_checked = _move_date_first(df_2_checked)
 
     return make_unique_columns(df_1_checked), make_unique_columns(df_2_checked)
+
+
+def _fill_nan_from_pair(df_target, df_source, date_col_target, date_col_source):
+    """
+    Заполняет NaN в df_target значениями из df_source для совпадающих дат.
+
+    Например: если в LME есть дата 2026-09-03 с NaN,
+    а в Westmetall есть эта же дата с реальными значениями,
+    заполняем NaN в LME значениями из Westmetall.
+    """
+    if df_target.empty or df_source.empty:
+        return df_target
+
+    df_target = df_target.copy()
+    df_source = df_source.copy()
+
+    # Нормализуем даты
+    df_target[date_col_target] = pd.to_datetime(
+        df_target[date_col_target], errors="coerce").dt.normalize()
+    df_source[date_col_source] = pd.to_datetime(
+        df_source[date_col_source], errors="coerce").dt.normalize()
+
+    # Создаём словарь: дата -> строка из source
+    source_dict = {}
+    for _, row in df_source.iterrows():
+        date_val = row[date_col_source]
+        if pd.notna(date_val):
+            source_dict[date_val] = row
+
+    # Заполняем NaN в target
+    for idx, row in df_target.iterrows():
+        date_val = row[date_col_target]
+
+        if pd.isna(date_val) or date_val not in source_dict:
+            continue
+
+        source_row = source_dict[date_val]
+
+        # Для каждой колонки в target, если значение NaN, берём из source
+        for col in df_target.columns:
+            if col == date_col_target:
+                continue
+
+            # Ищем соответствующую колонку в source (может быть с другим регистром)
+            source_col = None
+            for src_col in df_source.columns:
+                if src_col.lower() == col.lower():
+                    source_col = src_col
+                    break
+
+            if source_col is None:
+                continue
+
+            # Если в target NaN, а в source есть значение — заполняем
+            if pd.isna(row[col]) and pd.notna(source_row[source_col]):
+                df_target.at[idx, col] = source_row[source_col]
+
+    return df_target
 
 
 def check_and_save_pair(path_1, path_2, pair_name="", index=False):
@@ -414,4 +471,7 @@ __all__ = [
     "show_db",
     "db_check",
     "excel_to_csv_db",
+    "_fill_nan_from_pair",
+    "_find_date_column",
+    "_move_date_first",
 ]

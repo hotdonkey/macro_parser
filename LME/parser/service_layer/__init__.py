@@ -10,6 +10,9 @@ from .services import (
     show_db,
     db_check,
     excel_to_csv_db,
+    _fill_nan_from_pair,
+    _find_date_column,
+    _move_date_first,
 )
 
 __all__ = [
@@ -22,4 +25,7 @@ __all__ = [
     "show_db",
     "db_check",
     "excel_to_csv_db",
+    "_fill_nan_from_pair",
+    "_find_date_column",
+    "_move_date_first",
 ]
