@@ -12,6 +12,7 @@ import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import Select
 
 import undetected_chromedriver as uc
 
@@ -39,10 +40,8 @@ METALS = {
 # Формат: "http://user:pass@host:port" или "socks5://host:port"
 PROXY = None
 
-CF_WAIT = 10        # ожидание решения Cloudflare после открытия страницы
-AJAX_WAIT = 5       # ожидание ajax-запроса после клика (увеличено с 3)
-RETRY_ATTEMPTS = 3  # сколько раз пытаться обработать один металл
-RETRY_PAUSE = 1.5   # пауза между попытками (сек)
+CF_WAIT = 10   # ожидание решения Cloudflare после открытия страницы
+AJAX_WAIT = 3  # ожидание ajax-запроса после клика
 
 
 # ================================================================
@@ -69,14 +68,6 @@ def _build_driver():
 # ================================================================
 # Парсинг сетевых логов CDP
 # ================================================================
-def _flush_logs(driver):
-    """Сбрасывает накопленные CDP-логи, чтобы не подхватить чужие ответы."""
-    try:
-        driver.get_log("performance")
-    except Exception:
-        pass
-
-
 def _collect_responses(driver) -> dict[str, str]:
     """
     Забирает все performance-логи, находит Network.responseReceived
@@ -135,23 +126,29 @@ def _scrape_via_browser() -> dict[str, pd.DataFrame]:
         driver.get(PAGE_URL)
         time.sleep(CF_WAIT)
 
-        # Первичный сброс логов от загрузки страницы
-        _flush_logs(driver)
+        # Сбрасываем накопленные логи от загрузки страницы
+        try:
+            driver.get_log("performance")
+        except Exception:
+            pass
 
         for option_value, metal_name in METALS.items():
             print(f"[LBMA/Selenium] Обрабатываем {metal_name}...")
 
-            # ← ключевое: чистим логи ПЕРЕД каждым металлом,
-            # чтобы не поймать старые ответы от предыдущей итерации
-            _flush_logs(driver)
+            try:
+                _select_metal(driver, option_value)
+                _click_pm(driver)
+                time.sleep(AJAX_WAIT)
 
-            df = _process_metal_with_retry(
-                driver, option_value, metal_name
-            )
-            results[metal_name] = df
-            print(
-                f"[LBMA/Selenium] {metal_name}: получено {len(df)} строк"
-            )
+                df = _extract_metal_json(driver, metal_name)
+                results[metal_name] = df
+                print(
+                    f"[LBMA/Selenium] {metal_name}: получено {len(df)} строк")
+
+            except Exception as e:
+                print(f"[LBMA/Selenium] {metal_name}: ошибка: {e}")
+                results[metal_name] = pd.DataFrame(
+                    columns=["Date", metal_name])
 
     finally:
         try:
@@ -162,95 +159,24 @@ def _scrape_via_browser() -> dict[str, pd.DataFrame]:
     return results
 
 
-def _process_metal_with_retry(
-    driver,
-    option_value: str,
-    metal_name: str,
-    attempts: int = RETRY_ATTEMPTS,
-) -> pd.DataFrame:
-    """Пробует выбрать металл и перехватить JSON несколько раз."""
-    for attempt in range(1, attempts + 1):
-        try:
-            _select_metal(driver, option_value)
-            _click_pm(driver)
-            time.sleep(AJAX_WAIT)
-
-            df = _extract_metal_json(driver, metal_name)
-            if not df.empty:
-                return df
-
-            print(
-                f"[LBMA/Selenium] {metal_name}: попытка {attempt} "
-                f"не дала данных, повторяем..."
-            )
-            _flush_logs(driver)
-            time.sleep(RETRY_PAUSE)
-
-        except Exception as e:
-            print(
-                f"[LBMA/Selenium] {metal_name}: попытка {attempt} "
-                f"упала: {e}"
-            )
-            _flush_logs(driver)
-            time.sleep(RETRY_PAUSE)
-
-    return pd.DataFrame(columns=["Date", metal_name])
-
-
 def _select_metal(driver, option_value: str):
-    """
-    Выбирает металл через JS — работает,
-    даже если элемент 'not interactable'.
-    """
     select_el = driver.find_element(
         By.CSS_SELECTOR, "select.js-priceswidget-metal"
     )
-    # Скроллим в центр экрана и даём браузеру секунду на перерисовку
-    driver.execute_script(
-        "arguments[0].scrollIntoView({block:'center'});", select_el
-    )
-    time.sleep(0.5)
-
-    # Меняем value напрямую и эмулируем change-событие
-    driver.execute_script(
-        """
-        const sel = arguments[0];
-        sel.value = arguments[1];
-        sel.dispatchEvent(new Event('input',  {bubbles: true}));
-        sel.dispatchEvent(new Event('change', {bubbles: true}));
-        """,
-        select_el,
-        option_value,
-    )
-    time.sleep(0.5)
+    Select(select_el).select_by_value(option_value)
 
 
 def _click_pm(driver):
-    """Кликает PM. Если обычный click не срабатывает — жмёт через JS."""
     pm_btns = driver.find_elements(
-        By.CSS_SELECTOR,
-        "button.js-priceswidget-fixing[data-fixing='pm']",
+        By.CSS_SELECTOR, "button.js-priceswidget-fixing[data-fixing='pm']"
     )
     if not pm_btns:
         raise RuntimeError("Кнопка PM не найдена")
 
     pm_btn = pm_btns[0]
     classes = pm_btn.get_attribute("class") or ""
-    if "bg-blue-bgrad" in classes:
-        # PM уже активен — кликать не нужно
-        return
-
-    driver.execute_script(
-        "arguments[0].scrollIntoView({block:'center'});", pm_btn
-    )
-    time.sleep(0.3)
-
-    try:
+    if "bg-blue-bgrad" not in classes:
         pm_btn.click()
-    except Exception:
-        # Фолбэк на JS-клик
-        driver.execute_script("arguments[0].click();", pm_btn)
-    time.sleep(0.5)
 
 
 def _extract_metal_json(driver, metal_name: str) -> pd.DataFrame:
@@ -264,9 +190,7 @@ def _extract_metal_json(driver, metal_name: str) -> pd.DataFrame:
 
     responses = _collect_responses(driver)
     print(
-        f"[LBMA/Selenium] Сетевых ответов от prices.lbma.org.uk: "
-        f"{len(responses)}"
-    )
+        f"[LBMA/Selenium] Сетевых ответов от prices.lbma.org.uk: {len(responses)}")
 
     # Идём в обратном порядке — самые свежие ответы в конце лога
     for request_id, url in reversed(list(responses.items())):
@@ -320,39 +244,18 @@ async def lbma_prescious_async():
     try:
         results = await asyncio.to_thread(_scrape_via_browser)
 
-        gold = results.get(
-            "Gold", pd.DataFrame(columns=["Date", "Gold"])
-        )
-        silver = results.get(
-            "Silver", pd.DataFrame(columns=["Date", "Silver"])
-        )
-        platinum = results.get(
-            "Platinum", pd.DataFrame(columns=["Date", "Platinum"])
-        )
-        palladium = results.get(
-            "Palladium", pd.DataFrame(columns=["Date", "Palladium"])
-        )
+        gold = results.get("Gold",      pd.DataFrame(columns=["Date", "Gold"]))
+        silver = results.get("Silver",    pd.DataFrame(
+            columns=["Date", "Silver"]))
+        platinum = results.get("Platinum",  pd.DataFrame(
+            columns=["Date", "Platinum"]))
+        palladium = results.get("Palladium", pd.DataFrame(
+            columns=["Date", "Palladium"]))
 
-        # ===== Защита от записи нулей в историю =====
-        # Если хотя бы один металл не получен — не сохраняем,
-        # иначе fillna(0) создаст ложные нули в базе.
-        missing = [
-            name for name, df in (
-                ("Gold", gold),
-                ("Silver", silver),
-                ("Platinum", platinum),
-                ("Palladium", palladium),
-            )
-            if df.empty
-        ]
-        if missing:
-            print(
-                f"[LBMA/Selenium] не получены металлы: {missing} — "
-                f"сохранение пропущено, чтобы не записать нули в историю"
-            )
+        if all(df.empty for df in (gold, silver, platinum, palladium)):
+            print("[LBMA/Selenium] все ответы пустые — сохранение пропущено")
             return
 
-        # ===== Объединение =====
         result_df = (
             gold.merge(silver, on="Date", how="outer")
             .merge(platinum, on="Date", how="outer")
@@ -360,7 +263,6 @@ async def lbma_prescious_async():
         )
         result_df = result_df.sort_values("Date").reset_index(drop=True)
 
-        # ===== Чтение старой базы =====
         if XLSX_PATH.exists():
             historical = pd.read_excel(XLSX_PATH)
             if historical.columns.size > 0 and str(
@@ -382,20 +284,15 @@ async def lbma_prescious_async():
         result_df["_priority"] = 1
 
         combined = pd.concat([historical, result_df], ignore_index=True)
-        combined["Date"] = pd.to_datetime(
-            combined["Date"], errors="coerce"
-        )
+        combined["Date"] = pd.to_datetime(combined["Date"], errors="coerce")
 
         for col in combined.columns:
             if col not in ["Date", "_priority"]:
-                combined[col] = pd.to_numeric(
-                    combined[col], errors="coerce"
-                )
+                combined[col] = pd.to_numeric(combined[col], errors="coerce")
 
         combined = combined.dropna(subset=["Date"])
         combined = combined.sort_values(
-            ["Date", "_priority"], kind="mergesort"
-        )
+            ["Date", "_priority"], kind="mergesort")
         combined = combined.drop(columns=["_priority"])
 
         result = combined.groupby("Date", as_index=False).last()
@@ -407,9 +304,7 @@ async def lbma_prescious_async():
             date_format="YYYY-MM-DD",
             datetime_format="YYYY-MM-DD",
         ) as writer:
-            result.to_excel(
-                writer, sheet_name="lbma_metall", index=False
-            )
+            result.to_excel(writer, sheet_name="lbma_metall", index=False)
 
         print("[LBMA/Selenium] is done!!!")
 
