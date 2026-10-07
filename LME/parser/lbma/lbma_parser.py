@@ -62,7 +62,7 @@ def _build_driver():
     if PROXY:
         options.add_argument(f"--proxy-server={PROXY}")
 
-    driver = uc.Chrome(options=options, use_subprocess=True)
+    driver = uc.Chrome(options=options, version_main=154, use_subprocess=True)
     return driver
 
 
