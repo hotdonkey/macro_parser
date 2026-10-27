@@ -39,6 +39,8 @@ METALS = {
 # Формат: "http://user:pass@host:port" или "socks5://host:port"
 PROXY = None
 
+BROWSER_VERSION = 156
+
 CF_WAIT = 10        # ожидание решения Cloudflare после открытия страницы
 AJAX_WAIT = 5       # ожидание ajax-запроса после клика (увеличено с 3)
 RETRY_ATTEMPTS = 5  # сколько раз пытаться обработать один металл
@@ -48,7 +50,7 @@ RETRY_PAUSE = 2.5   # пауза между попытками (сек)
 # ================================================================
 # Создание драйвера с поддержкой network-логов (CDP)
 # ================================================================
-def _build_driver():
+def _build_driver(version_main=None):
     options = uc.ChromeOptions()
     # options.add_argument("--headless=new")  # для отладки лучше с GUI
     options.add_argument("--no-sandbox")
@@ -62,7 +64,8 @@ def _build_driver():
     if PROXY:
         options.add_argument(f"--proxy-server={PROXY}")
 
-    driver = uc.Chrome(options=options, version_main=154, use_subprocess=True)
+    driver = uc.Chrome(
+        options=options, version_main=BROWSER_VERSION, use_subprocess=True)
     return driver
 
 
