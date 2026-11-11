@@ -39,7 +39,7 @@ METALS = {
 # Формат: "http://user:pass@host:port" или "socks5://host:port"
 PROXY = None
 
-BROWSER_VERSION = 156
+BROWSER_VERSION = 157
 
 CF_WAIT = 10        # ожидание решения Cloudflare после открытия страницы
 AJAX_WAIT = 5       # ожидание ajax-запроса после клика (увеличено с 3)
