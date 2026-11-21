@@ -371,25 +371,31 @@ def show_db(title, path, sheet_name=0, rows=5, show_head=False):
         print("⚠️ данных нет")
         return
 
-    display(df.head(rows) if show_head else df.tail(rows))
+    part = df.head(rows) if show_head else df.tail(rows)
+
+    # display() есть только в Jupyter, в терминале падает
+    try:
+        display(part)
+    except NameError:
+        print(part.to_string())
 
 
-def db_check():
+def db_check(lme_path, westmetall_path, kitco_path, lbma_path):
     """
-    Проверка целостности парных баз.
+    Проверка целостности парных баз. Пути передаёт вызывающий код.
     """
     print("Проверка LME / Westmetall...")
     check_and_save_pair(
-        LME_PATH,
-        WESTMETALL_PATH,
+        lme_path,
+        westmetall_path,
         pair_name="LME / Westmetall",
         index=False,
     )
 
     print("Проверка Kitco / LBMA...")
     check_and_save_pair(
-        KITCO_PATH,
-        LBMA_PATH,
+        kitco_path,
+        lbma_path,
         pair_name="Kitco / LBMA",
         index=False,
     )

@@ -17,10 +17,9 @@ from kitco import kitco_parser_async
 
 # Сервисные функции из service_layer
 from service_layer import (
-    read_db,
     show_db,
-    db_check,
-    excel_to_csv_db
+    db_check as service_db_check,
+    excel_to_csv_db,
 )
 
 warnings.filterwarnings("ignore")
@@ -42,6 +41,13 @@ CB_METALLS_PATH = Path("cbr/data/cb_metalls.xlsx")
 
 NBK_PATH = Path("nbk/data/nbk_tenge.xlsx")
 SHMET_PATH = Path("shmet/data/shmet_historical.xlsx")
+
+
+# ================================================================
+# Проверка целостности парных баз
+# ================================================================
+def db_check():
+    service_db_check(LME_PATH, WESTMETALL_PATH, KITCO_PATH, LBMA_PATH)
 
 
 # ================================================================
